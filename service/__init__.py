@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
-from scipy.sparse import csr_matrix
+from sklearn.feature_extraction.text import TfidfVectorizer
+from scipy.sparse import csr_matrix, hstack
+from implicit.als import AlternatingLeastSquares
 import logging
 from util import DataFetcher
 
@@ -15,59 +16,67 @@ class RecommendationService:
         self.users = users
         self.book_genres = book_genres
         self.user_prefs = user_prefs
-        self.svd_model = None
+        self.als_model = None
         self.book_features = None
         self.user_genre_weights = None
+        self.tfidf_matrix = None
+        self.user_item_matrix = None
+        self.book_ids = None
 
     def fit(self, user_item_matrix):
         logger.info("Fitting recommendation model...")
-        # Prepare content-based features
         self.books['average_rating'] = pd.to_numeric(self.books['average_rating'], errors='coerce').fillna(0)
         self.books['num_ratings'] = pd.to_numeric(self.books['num_ratings'], errors='coerce').fillna(0)
         
         # Language features
         language_onehot = pd.get_dummies(self.books['language'], prefix='lang').reindex(self.books.index, fill_value=0)
         
-        # Genre features: Keep as DataFrame until concatenation
+        # Genre features
         valid_book_genres = self.book_genres[self.book_genres['book_id'].isin(self.books['id'])]
         genre_matrix = valid_book_genres.pivot_table(index='book_id', columns='genre_id', aggfunc='size', fill_value=0)
         genre_onehot = pd.DataFrame(0, index=self.books['id'], columns=[f'genre_{col}' for col in genre_matrix.columns])
         genre_onehot.loc[genre_matrix.index] = genre_matrix.values
-        genre_onehot = genre_onehot.reindex(self.books.index, fill_value=0)  # Keep as DataFrame
+        genre_onehot = genre_onehot.reindex(self.books.index, fill_value=0)
         
         # Author features
         author_onehot = pd.get_dummies(self.books['author'], prefix='author').reindex(self.books.index, fill_value=0)
         
-        # Concatenate features
-        features = pd.concat([self.books[['average_rating', 'num_ratings']], language_onehot, genre_onehot, author_onehot], axis=1)
-        logger.debug("Feature matrix shape: %s", features.shape)
-        scaler = StandardScaler()
+        # TF-IDF features
+        tfidf = TfidfVectorizer(stop_words='english', max_features=1000)
+        self.tfidf_matrix = tfidf.fit_transform(self.books['description'].fillna(''))
+        logger.debug("TF-IDF matrix shape: %s", self.tfidf_matrix.shape)
+        
+        # Combine features
+        numeric_features = csr_matrix(self.books[['average_rating', 'num_ratings']].values)
+        language_onehot = csr_matrix(language_onehot.values)
+        genre_onehot = csr_matrix(genre_onehot.values)
+        author_onehot = csr_matrix(author_onehot.values)
+        features = hstack([numeric_features, language_onehot, genre_onehot, author_onehot, self.tfidf_matrix])
+        scaler = StandardScaler(with_mean=False)
         self.book_features = scaler.fit_transform(features)
-        if self.book_features.shape[0] != len(self.books):
-            logger.error("Mismatch: book_features rows (%d) != books rows (%d)", self.book_features.shape[0], len(self.books))
-            raise ValueError("Feature matrix rows must match number of books")
-
-        # Prepare user genre preferences
+        logger.debug("Combined feature matrix shape: %s", features.shape)
+        
+        # User genre preferences
         all_genre_ids = self.book_genres['genre_id'].unique()
         user_genre_matrix = self.user_prefs.pivot_table(index='user_id', columns='genre_id', aggfunc='size', fill_value=0)
         self.user_genre_weights = user_genre_matrix.reindex(columns=all_genre_ids, fill_value=0).add_prefix('genre_')
-        logger.debug("User genre weights shape: %s", self.user_genre_weights.shape)
-
-        # Fit SVD for collaborative filtering
-        n_users, n_books = user_item_matrix.shape
-        max_components = 50
-        n_components = min(max_components, min(n_users, n_books))
-        if n_components < 1:
-            n_components = 1
-        logger.info("Setting SVD n_components to %d (users: %d, books: %d)", n_components, n_users, n_books)
-        self.svd_model = TruncatedSVD(n_components=n_components, random_state=42)
-        self.svd_model.fit(user_item_matrix)
+        
+        # Expand user_item_matrix to match all books
+        full_user_item_matrix = pd.DataFrame(0, index=user_item_matrix.index, columns=self.books['id'])
+        for col in user_item_matrix.columns:
+            if col in full_user_item_matrix.columns:
+                full_user_item_matrix[col] = user_item_matrix[col]
+        self.book_ids = full_user_item_matrix.columns
+        self.user_item_matrix = csr_matrix(full_user_item_matrix.values)
+        
+        # Fit ALS
+        self.als_model = AlternatingLeastSquares(factors=20, regularization=0.1, iterations=15)
+        self.als_model.fit(self.user_item_matrix)
         self.users = self.users.set_index('id')
-        self.n_books = n_books
         logger.info("Model fitting complete.")
 
     def compute_content_scores(self, user_id, user_item_matrix):
-        has_interactions = user_id in user_item_matrix.index and np.sum(user_item_matrix.loc[user_id].values) > 0
+        has_interactions = user_id in user_item_matrix.index and user_item_matrix.loc[user_id].sum() > 0
         
         interactions = np.zeros(len(self.books))
         if has_interactions:
@@ -78,38 +87,36 @@ class RecommendationService:
                     interactions[idx[0]] = user_ratings[book_id]
 
         if has_interactions and np.sum(interactions) > 0:
-            user_profile = np.dot(interactions, self.book_features) / np.sum(interactions)
-            base_content_scores = cosine_similarity([user_profile], self.book_features)[0]
+            user_profile = csr_matrix(interactions).dot(self.book_features) / np.sum(interactions)
+            base_content_scores = cosine_similarity(user_profile, self.book_features)[0]
         else:
             base_content_scores = np.zeros(len(self.books))
 
         if user_id in self.user_genre_weights.index:
             user_genre_vector = self.user_genre_weights.loc[user_id].values
             genre_features = self.book_features[:, 2:2+len(self.book_genres['genre_id'].unique())]
-            genre_boost = cosine_similarity([user_genre_vector], genre_features)[0]
+            genre_boost = cosine_similarity(csr_matrix(user_genre_vector), genre_features)[0]
             content_scores = base_content_scores + 0.5 * genre_boost if has_interactions else genre_boost
         else:
             content_scores = base_content_scores
 
         return content_scores
 
-    def get_recommendations(self, user_id, user_item_matrix, num_recommendations=5):
+    def get_recommendations(self, user_id, user_item_matrix, num_recommendations=20):
         has_ratings = user_id in user_item_matrix.index and np.sum(user_item_matrix.loc[user_id].values) > 0
 
         if has_ratings:
-            user_collab_vector = self.svd_model.transform(user_item_matrix.loc[[user_id]])
-            if user_collab_vector.shape[1] == self.svd_model.components_.shape[0]:
-                collab_book_vectors = self.svd_model.components_.T
-                collaborative_scores = np.dot(user_collab_vector, collab_book_vectors.T)[0]
-                if collaborative_scores.shape[0] < len(self.books):
-                    collaborative_scores = np.pad(collaborative_scores, (0, len(self.books) - collaborative_scores.shape[0]), mode='constant')
-                elif collaborative_scores.shape[0] > len(self.books):
-                    collaborative_scores = collaborative_scores[:len(self.books)]
-            else:
-                logger.warning("SVD components mismatch (vector: %s, components: %s); falling back to content-based for user %d", 
-                               user_collab_vector.shape, self.svd_model.components_.shape, user_id)
-                collaborative_scores = np.zeros(len(self.books))
+            user_idx = user_item_matrix.index.get_loc(user_id)
+            # ALS collaborative scores
+            item_ids, als_scores = self.als_model.recommend(user_idx, self.user_item_matrix[user_idx], N=num_recommendations * 2, filter_already_liked_items=False)
+            collaborative_scores = np.zeros(len(self.books))
+            for book_idx, score in zip(item_ids, als_scores):
+                book_id = self.book_ids[book_idx]
+                idx = self.books.index[self.books['id'] == book_id].tolist()
+                if idx:
+                    collaborative_scores[idx[0]] = score
 
+            # Gender boost
             user_gender = self.users.loc[user_id, 'gender']
             gender_boost = np.zeros(len(self.books))
             for book_id in user_item_matrix.columns:
@@ -123,18 +130,12 @@ class RecommendationService:
             collaborative_scores += gender_boost
 
             content_scores = self.compute_content_scores(user_id, user_item_matrix)
-            hybrid_scores = 0.6 * collaborative_scores + 0.4 * content_scores
+            hybrid_scores = 0.7 * collaborative_scores + 0.3 * content_scores
         else:
             content_scores = self.compute_content_scores(user_id, user_item_matrix)
-            hybrid_scores = content_scores
+            hybrid_scores = content_scores * 2
 
-        if has_ratings:
-            rated_books = user_item_matrix.loc[user_id][user_item_matrix.loc[user_id] > 0].index
-            for book_id in rated_books:
-                idx = self.books.index[self.books['id'] == book_id].tolist()
-                if idx:
-                    hybrid_scores[idx[0]] = -np.inf
-
+        logger.debug("Hybrid scores for user %s: %s", user_id, hybrid_scores)
         recommended_indices = np.argsort(hybrid_scores)[-num_recommendations:][::-1]
         recommended_books = self.books.iloc[recommended_indices]
         logger.info("Recommendations for user %s: %s", user_id, recommended_books[['id', 'title']].to_dict('records'))

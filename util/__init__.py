@@ -105,7 +105,7 @@ class DataFetcher:
             response = requests.get(f'{fetch_data_url}/user/user-review')
             response.raise_for_status()
             raw_data = response.json()
-            logger.debug("Raw user reviews data: %s", raw_data['reviews'][:5])
+            logger.debug("Raw user reviews data: %s", raw_data['reviews'])
             reviews_df = pd.DataFrame(raw_data['reviews'])
             # Aggregate duplicate reviews by averaging ratings
             aggregated_reviews = reviews_df.groupby(['user_id', 'book_id'])['rating'].mean().reset_index()
