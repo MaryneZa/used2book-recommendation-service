@@ -30,11 +30,11 @@ def get_recommendations():
         logger.warning("No user_id provided in request")
         return jsonify({"error": "user_id is required"}), 400
 
-    # Fetch user data to validate existence
-    user_data = DataFetcher.get_user_data(user_id)
-    if not user_data:
-        logger.info(f"User ID {user_id} not found")
-        return jsonify({"error": "User not found"}), 404
+    # # Fetch user data to validate existence
+    # user_data = DataFetcher.get_user_data(user_id)
+    # if not user_data:
+    #     logger.info(f"User ID {user_id} not found")
+    #     return jsonify({"error": "User not found"}), 404
 
     try:
         # Generate recommendations
