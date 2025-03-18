@@ -1,1 +1,2 @@
-*/5 * * * * root python /app/refresh.py >> /var/log/cron.log 2>&1
+PATH=/usr/local/bin:/usr/bin:/bin
+*/1 * * * * root /usr/local/bin/python /app/refresh.py >> /var/log/cron.log 2>&1

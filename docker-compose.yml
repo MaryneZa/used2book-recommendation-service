@@ -9,18 +9,25 @@ services:
       - data-volume:/data
     environment:
       - FLASK_ENV=production
+      - DOCKER_ENV=1
+      - FETCH_DATA_URL=http://host.docker.internal:6951
     depends_on:
       - refresh
-    command: ["python", "app.py"]
+    command: >
+      sh -c "while [ ! -f /data/recommendation_service.pkl ]; do sleep 1; done && python app.py"
 
   refresh:
     build: .
     volumes:
       - data-volume:/data
       - ./cron:/etc/cron.d
+    environment:
+      - DOCKER_ENV=1
+      - FETCH_DATA_URL=http://host.docker.internal:6951
     command: >
-      sh -c "apt-get update && apt-get install -y cron &&
-             cp /etc/cron.d/refresh_cron /etc/cron.d/refresh_cron &&
+      sh -c "python refresh.py && apt-get update && apt-get install -y cron &&
+             echo 'PATH=/usr/local/bin:/usr/bin:/bin' > /etc/cron.d/refresh_cron &&
+             echo '*/1 * * * * root /usr/local/bin/python /app/refresh.py >> /var/log/cron.log 2>&1' >> /etc/cron.d/refresh_cron &&
              chmod 0644 /etc/cron.d/refresh_cron &&
              crontab /etc/cron.d/refresh_cron &&
              touch /var/log/cron.log &&

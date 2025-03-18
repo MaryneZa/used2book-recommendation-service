@@ -4,4 +4,6 @@ numpy
 scikit-learn
 implicit
 scipy
-flask-caching  # Optional for caching
+requests
+dotenv
+threadpoolctl

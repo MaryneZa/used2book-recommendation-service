@@ -139,7 +139,7 @@ class RecommendationService:
         recommended_indices = np.argsort(hybrid_scores)[-num_recommendations:][::-1]
         recommended_books = self.books.iloc[recommended_indices]
         logger.info("Recommendations for user %s: %s", user_id, recommended_books[['id', 'title']].to_dict('records'))
-        return recommended_books[['id', 'title', 'average_rating', 'num_ratings']]
+        return recommended_books[['id']]
 
 class RecommendationServiceInitializer:
     def __init__(self):

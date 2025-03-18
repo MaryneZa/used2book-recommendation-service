@@ -4,9 +4,15 @@ import logging
 from dotenv import load_dotenv
 import os
 
-# Load environment variables
-load_dotenv()
-fetch_data_url = os.getenv('FETCH_DATA_URL')
+# # Load environment variables
+# load_dotenv()
+# fetch_data_url = os.getenv('FETCH_DATA_URL')
+
+# Load .env only if it exists, but don’t override Docker env unless explicit
+if os.path.exists('.env'):
+    load_dotenv(override=False)  # Don’t override existing env vars
+fetch_data_url = os.environ.get('FETCH_DATA_URL', 'http://host.docker.internal:6951')
+
 
 # Configure logging
 logging.basicConfig(
@@ -16,6 +22,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class DataFetcher:
+    
+    @staticmethod
+    def get_user_data(id):
+        try:
+            response = requests.get(f'{fetch_data_url}/user/user-info/{id}')
+            response.raise_for_status()
+            raw_data = response.json()
+            logger.debug("Raw user data: %s", raw_data['user'])
+            return raw_data['user']
+        except requests.RequestException as e:
+            logger.error("Failed to fetch users: %s", str(e))
+            raise Exception(f"Failed to fetch users: {str(e)}")
+        except (KeyError, TypeError) as e:
+            logger.error("Invalid users data format: %s", str(e))
+            raise Exception(f"Invalid users data format: {str(e)}")
+            
+    
     @staticmethod
     def get_all_books():
         try:
