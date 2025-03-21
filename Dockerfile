@@ -1,10 +1,13 @@
+# File: Dockerfile
 FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install libgomp1 for implicit
+# Install libgomp1 (for 'implicit'), plus cron + curl
 RUN apt-get update && apt-get install -y \
     libgomp1 \
+    cron \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

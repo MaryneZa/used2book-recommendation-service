@@ -1,12 +1,9 @@
+# util/__init__.py 
 import requests
 import pandas as pd
 import logging
 from dotenv import load_dotenv
 import os
-
-# # Load environment variables
-# load_dotenv()
-# fetch_data_url = os.getenv('FETCH_DATA_URL')
 
 # Load .env only if it exists, but don’t override Docker env unless explicit
 if os.path.exists('.env'):

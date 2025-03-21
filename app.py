@@ -1,3 +1,4 @@
+# File: app.py
 from flask import Flask, request, jsonify
 from util import DataFetcher
 import logging
@@ -22,6 +23,8 @@ def load_recommendation_service():
         logger.error(f"Failed to load recommendation service: {e}")
         raise
 
+# Load model once at startup. 
+# (We'll add a route to reload it below.)
 recommendation_service, user_item_matrix = load_recommendation_service()
 logger.info("Recommendation service loaded from file")
 
@@ -56,6 +59,27 @@ def get_recommendations():
     except Exception as e:
         logger.error(f"Error generating recommendations for user {user_id}: {e}")
         return jsonify({"error": "Internal server error"}), 500
+
+
+# --------------------------------------------------------------------------
+# ADDED: A new endpoint to reload the model in memory after refresh.py updates
+#        /data/recommendation_service.pkl
+# --------------------------------------------------------------------------
+@app.route('/reload-model', methods=['POST'])
+def reload_model():
+    """
+    Reloads the updated recommendation_service.pkl from disk,
+    so we can serve new recommendations without restarting the container.
+    """
+    global recommendation_service, user_item_matrix
+    try:
+        recommendation_service, user_item_matrix = load_recommendation_service()
+        logger.info("Reloaded recommendation service from file")
+        return jsonify({"status": "model reloaded"}), 200
+    except Exception as e:
+        logger.error(f"Failed to reload the model: {e}")
+        return jsonify({"error": "Failed to reload model"}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

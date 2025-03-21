@@ -1,3 +1,4 @@
+# File: docker-compose.yml
 version: '3.8'
 
 services:
@@ -25,13 +26,25 @@ services:
       - DOCKER_ENV=1
       - FETCH_DATA_URL=http://host.docker.internal:6951
     command: >
-      sh -c "python refresh.py && apt-get update && apt-get install -y cron &&
-             echo 'PATH=/usr/local/bin:/usr/bin:/bin' > /etc/cron.d/refresh_cron &&
-             echo '*/1 * * * * root /usr/local/bin/python /app/refresh.py >> /var/log/cron.log 2>&1' >> /etc/cron.d/refresh_cron &&
-             chmod 0644 /etc/cron.d/refresh_cron &&
-             crontab /etc/cron.d/refresh_cron &&
-             touch /var/log/cron.log &&
-             cron && tail -f /var/log/cron.log"
+      sh -c "
+        # Install cron + curl in the container
+        apt-get update && apt-get install -y cron curl &&
+
+        # Run the initial training once at startup
+        python refresh.py &&
+
+        # Overwrite /etc/cron.d/refresh_cron with two lines:
+        # 1) Retrain the model
+        # 2) Then reload it in the api container
+        echo '*/1 * * * * /usr/local/bin/python /app/refresh.py >> /var/log/cron.log 2>&1' > /etc/cron.d/refresh_cron &&
+        echo '*/1 * * * * curl -X POST http://api:5000/reload-model >> /var/log/cron.log 2>&1' >> /etc/cron.d/refresh_cron &&
+
+        # Cron housekeeping
+        chmod 0644 /etc/cron.d/refresh_cron &&
+        crontab /etc/cron.d/refresh_cron &&
+        touch /var/log/cron.log &&
+        cron && tail -f /var/log/cron.log
+      "
 
 volumes:
   data-volume:

@@ -1,2 +1,2 @@
-PATH=/usr/local/bin:/usr/bin:/bin
-*/1 * * * * root /usr/local/bin/python /app/refresh.py >> /var/log/cron.log 2>&1
+*/1 * * * * /usr/local/bin/python /app/refresh.py >> /var/log/cron.log 2>&1
+*/1 * * * * curl -X POST http://api:5000/reload-model >> /var/log/cron.log 2>&1
